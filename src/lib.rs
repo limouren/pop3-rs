@@ -342,5 +342,21 @@ fn readline(stream: &mut tcpstream::TCPStreamType, buf: &mut Vec<u8>) -> Result<
         }
     }
 
-    return Ok(String::from_utf8(buf.to_vec())?);
+    let line = match String::from_utf8(buf.to_vec()) {
+        Ok(line) => line,
+        Err(e) => escape_bytes(e.as_bytes()),
+    };
+
+    return Ok(line);
+}
+
+fn escape_bytes(bytes: &[u8]) -> String {
+    bytes
+        .iter()
+        .map(|b| escape_default_to_string(std::ascii::escape_default(*b)))
+        .collect()
+}
+
+fn escape_default_to_string(ed: std::ascii::EscapeDefault) -> String {
+    ed.map(|b| return char::from(b)).collect()
 }
