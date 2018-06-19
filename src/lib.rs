@@ -49,10 +49,11 @@ extern crate lazy_static;
 extern crate openssl;
 extern crate regex;
 
-use std::io::BufReader;
-use openssl::ssl::{SslMethod, SslConnectorBuilder};
-use std::net::TcpStream;
+use openssl::ssl::{SslConnectorBuilder, SslMethod};
 use regex::Regex;
+use std::io::prelude::*;
+use std::io::BufReader;
+use std::net::TcpStream;
 
 pub mod errors {
     error_chain! {
@@ -67,15 +68,14 @@ pub mod errors {
 }
 use errors::*;
 
-mod tcpstream;
 pub mod pop3result;
 mod pop3resultimpl;
+mod tcpstream;
 mod utils;
+use pop3result::{POP3List, POP3Retr, POP3Stat, POP3Uidl};
 use tcpstream::TCPStreamType;
-use pop3result::{POP3Stat, POP3List, POP3Retr, POP3Uidl};
 
-#[derive(PartialEq)]
-#[derive(Debug)]
+#[derive(PartialEq, Debug)]
 enum POP3State {
     BEGIN,
     AUTHORIZATION,
@@ -103,8 +103,9 @@ impl POP3Connection {
             "SSL" => {
                 debug!("Creating a SSL Connection");
                 let connector = SslConnectorBuilder::new(SslMethod::tls())?.build();
-                TCPStreamType::SSL(BufReader::new(
-                        connector.connect(&account.host[..], tcp_stream)?))
+                TCPStreamType::SSL(
+                    BufReader::new(connector.connect(&account.host[..], tcp_stream)?),
+                )
             }
             _ => return Err("Unknown auth type".into()),
         };
@@ -267,34 +268,41 @@ impl POP3Connection {
     }
 
     fn read_response(&mut self, is_multiline: bool) -> Result<Vec<String>> {
-
-        lazy_static!{
+        lazy_static! {
             static ref RESPONSE: Regex =
                 Regex::new(r"^(?P<status>\+OK|-ERR) (?P<statustext>.*)").unwrap();
         }
-        const LF: u8 = 0x0a;
+        let mut buf: Vec<u8> = Vec::with_capacity(1024);
         let mut response_data: Vec<String> = Vec::new();
-        let mut buff = Vec::new();
         let mut complete;
 
         //First read the status line
-        self.stream.read_until(LF, &mut buff)?;
-        response_data.push(String::from_utf8(buff.clone())?);
+        response_data.push(read_status(&mut self.stream, &mut buf)?);
         info!("S: {}", response_data[0]);
 
         // Test if the response is positive. Else exit early.
         let status_line = response_data[0].clone();
-        let response_groups = RESPONSE.captures(&status_line).unwrap();
-        match response_groups.name("status").ok_or("Regex match failed")?.as_str() {
+        let response_groups = match RESPONSE.captures(&status_line) {
+            Some(a) => a,
+            None => {
+                println!("status_line = {:?}", status_line);
+                return Err("Un-parseable Response".into());
+            }
+        };
+        match response_groups
+            .name("status")
+            .ok_or("Regex match failed")?
+            .as_str()
+        {
             "+OK" => complete = false,
             "-ERR" => return Err(response_groups["statustext"].to_string().into()),
             _ => return Err("Un-parseable Response".into()),
         };
 
         while !complete && is_multiline {
-            buff.clear();
-            self.stream.read_until(LF, &mut buff)?;
-            let line = String::from_utf8(buff.clone())?;
+            buf.clear();
+
+            let line = readline(&mut self.stream, &mut buf)?;
             if line == ".\r\n" {
                 complete = true;
             } else {
@@ -305,4 +313,34 @@ impl POP3Connection {
         }
         Ok(response_data)
     }
+}
+
+fn read_status(stream: &mut tcpstream::TCPStreamType, buf: &mut Vec<u8>) -> Result<String> {
+    let mut line = readline(stream, buf)?;
+
+    while line.is_empty() {
+        line = readline(stream, buf)?;
+    }
+
+    return Ok(line);
+}
+
+fn readline(stream: &mut tcpstream::TCPStreamType, buf: &mut Vec<u8>) -> Result<String> {
+    static CL: u8 = '\r' as u8;
+    static LF: u8 = '\n' as u8;
+
+    let mut b = [0; 1];
+
+    loop {
+        stream.read_until(CL, buf)?;
+        stream.read_exact(&mut b)?;
+
+        buf.push(b[0]);
+
+        if b[0] == LF {
+            break;
+        }
+    }
+
+    return Ok(String::from_utf8(buf.to_vec())?);
 }
