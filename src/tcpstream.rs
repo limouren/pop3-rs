@@ -1,4 +1,5 @@
 use openssl::ssl::SslStream;
+use std::io;
 use std::io::{BufRead, BufReader, Error, Read, Write};
 use std::net::TcpStream;
 
@@ -48,10 +49,11 @@ impl TCPStreamType {
     pub fn shutdown(&mut self) {
         if let TCPStreamType::Plain(ref mut stream) = *self {
             trace!("Closing TCP Stream");
-            stream
-                .get_mut()
-                .shutdown(::std::net::Shutdown::Both)
-                .unwrap();
+            match stream.get_mut().shutdown(::std::net::Shutdown::Both) {
+                Ok(()) => (),
+                Err(ref e) if e.kind() == io::ErrorKind::NotConnected => (),
+                Err(ref e) => info!("Unknown error during shutdown; ignoring: {:?}", e),
+            }
         } else if let TCPStreamType::SSL(ref mut stream) = *self {
             trace!("Closing SSL Stream");
             stream.get_mut().shutdown().unwrap();
