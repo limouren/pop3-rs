@@ -285,7 +285,7 @@ impl POP3Connection {
         let response_groups = match RESPONSE.captures(&status_line) {
             Some(a) => a,
             None => {
-                println!("status_line = {:?}", status_line);
+                info!("status_line = {:?}", status_line);
                 return Err("Un-parseable Response".into());
             }
         };
